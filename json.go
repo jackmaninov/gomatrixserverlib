@@ -18,12 +18,14 @@ package gomatrixserverlib
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
@@ -51,18 +53,53 @@ func (e EventJSONs) UntrustedEvents(roomVersion RoomVersion) []PDU {
 		return nil
 	}
 	events := make([]PDU, 0, len(e))
+	droppedCount := 0
 	for _, js := range e {
 		event, err := verImpl.NewEventFromUntrustedJSON(js)
 		switch e := err.(type) {
 		case EventValidationError:
 			if !e.Persistable {
+				// Extract event info from raw JSON for debugging
+				eventID := gjson.GetBytes(js, "event_id").String()
+				eventType := gjson.GetBytes(js, "type").String()
+				roomID := gjson.GetBytes(js, "room_id").String()
+				logrus.WithFields(logrus.Fields{
+					"event_id":     eventID,
+					"event_type":   eventType,
+					"room_id":      roomID,
+					"room_version": roomVersion,
+					"error":        e.Message,
+					"error_code":   e.Code,
+				}).Debug("[UNTRUSTED_EVENTS] Dropping event due to non-persistable validation error")
+				droppedCount++
 				continue
 			}
 		case nil:
 		default:
+			// Extract event info from raw JSON for debugging
+			eventID := gjson.GetBytes(js, "event_id").String()
+			eventType := gjson.GetBytes(js, "type").String()
+			roomID := gjson.GetBytes(js, "room_id").String()
+			logrus.WithFields(logrus.Fields{
+				"event_id":     eventID,
+				"event_type":   eventType,
+				"room_id":      roomID,
+				"room_version": roomVersion,
+				"error":        err.Error(),
+				"error_type":   fmt.Sprintf("%T", err),
+			}).Debug("[UNTRUSTED_EVENTS] Dropping event due to parse error")
+			droppedCount++
 			continue
 		}
 		events = append(events, event)
+	}
+	if droppedCount > 0 {
+		logrus.WithFields(logrus.Fields{
+			"total_events":   len(e),
+			"dropped_events": droppedCount,
+			"parsed_events":  len(events),
+			"room_version":   roomVersion,
+		}).Debug("[UNTRUSTED_EVENTS] Finished parsing events with some dropped")
 	}
 	return events
 }
