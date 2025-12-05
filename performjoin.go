@@ -227,8 +227,12 @@ func PerformJoin(
 
 	// Sanity-check the join response to ensure that it has a create
 	// event, that the room version is known, etc.
+	// MSC3706: With partial state joins, the create event may be in state
+	// instead of auth_chain (servers can omit auth_chain events that appear in state).
 	authEvents := respSendJoin.GetAuthEvents().UntrustedEvents(roomVersion)
-	if err = checkEventsContainCreateEvent(authEvents); err != nil {
+	stateEvents := respSendJoin.GetStateEvents().UntrustedEvents(roomVersion)
+	allEvents := append(authEvents, stateEvents...)
+	if err = checkEventsContainCreateEvent(allEvents); err != nil {
 		return nil, &FederationError{
 			ServerName: input.ServerName,
 			Transient:  false,
@@ -240,9 +244,8 @@ func PerformJoin(
 	// get the membership events of all users, so we can store the mxid_mappings
 	// TODO: better way?
 	if roomVersion == RoomVersionPseudoIDs {
-		stateEvents := respSendJoin.GetStateEvents().UntrustedEvents(roomVersion)
-		events := append(authEvents, stateEvents...)
-		err = storeMXIDMappings(ctx, events, *input.RoomID, input.KeyRing, input.StoreSenderIDFromPublicID)
+		// Reuse allEvents (auth + state) from sanity check above
+		err = storeMXIDMappings(ctx, allEvents, *input.RoomID, input.KeyRing, input.StoreSenderIDFromPublicID)
 		if err != nil {
 			return nil, &FederationError{
 				ServerName: input.ServerName,
