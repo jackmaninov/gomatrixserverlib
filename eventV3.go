@@ -59,6 +59,14 @@ func newEventFromUntrustedJSONV3(eventJSON []byte, roomVersion IRoomVersion) (PD
 		}
 	}
 
+	// MSC4291: v3 create events must not have a room_id field. The room ID is
+	// derived from the create event's reference hash. Some implementations
+	// (e.g. Synapse) include room_id in the stored/federated JSON, which causes
+	// content hash and reference hash mismatches. Strip it before processing.
+	if eventJSON, err = stripCreateEventRoomID(eventJSON); err != nil {
+		return nil, err
+	}
+
 	if err = json.Unmarshal(eventJSON, &res); err != nil {
 		return nil, err
 	}
@@ -109,6 +117,12 @@ func newEventFromUntrustedJSONV3(eventJSON []byte, roomVersion IRoomVersion) (PD
 }
 
 func newEventFromTrustedJSONV3(eventJSON []byte, redacted bool, roomVersion IRoomVersion) (PDU, error) {
+	// MSC4291: strip room_id from create events (see newEventFromUntrustedJSONV3).
+	var err error
+	if eventJSON, err = stripCreateEventRoomID(eventJSON); err != nil {
+		return nil, err
+	}
+
 	res := eventV3{}
 	if err := json.Unmarshal(eventJSON, &res); err != nil {
 		return nil, err
@@ -128,6 +142,12 @@ func newEventFromTrustedJSONV3(eventJSON []byte, redacted bool, roomVersion IRoo
 }
 
 func newEventFromTrustedJSONWithEventIDV3(eventID string, eventJSON []byte, redacted bool, roomVersion IRoomVersion) (PDU, error) {
+	// MSC4291: strip room_id from create events (see newEventFromUntrustedJSONV3).
+	var err error
+	if eventJSON, err = stripCreateEventRoomID(eventJSON); err != nil {
+		return nil, err
+	}
+
 	res := &eventV3{}
 	if err := json.Unmarshal(eventJSON, &res); err != nil {
 		return nil, err
@@ -158,4 +178,21 @@ func checkRoomID(res *eventV3) error {
 		return fmt.Errorf("gomatrixserverlib: room_id must start with !")
 	}
 	return nil
+}
+
+// stripCreateEventRoomID removes the room_id field from m.room.create events
+// in v3+ event format. Per MSC4291, the room_id for these events is derived
+// from the create event's reference hash, so it must not be included in the
+// JSON when computing content or reference hashes. Some implementations
+// (e.g. Synapse) include room_id in the stored/federated create event JSON,
+// which would cause hash mismatches if not stripped.
+func stripCreateEventRoomID(eventJSON []byte) ([]byte, error) {
+	eventType := gjson.GetBytes(eventJSON, "type").Str
+	stateKey := gjson.GetBytes(eventJSON, "state_key")
+	if eventType == spec.MRoomCreate && stateKey.Exists() && stateKey.Str == "" {
+		if gjson.GetBytes(eventJSON, "room_id").Exists() {
+			return sjson.DeleteBytes(eventJSON, "room_id")
+		}
+	}
+	return eventJSON, nil
 }
